@@ -35,7 +35,7 @@ jobs:
         with:
           context: ./order-service
           push: true
-          tags: kaustav/order-service:latest
+          tags: kaustavacharya/order-service:latest
 
       # Build & push inventory-service image
       - name: Build and Push Inventory Service
