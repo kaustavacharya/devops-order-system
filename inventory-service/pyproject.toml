@@ -1,0 +1,15 @@
+[project]
+name = "inventory-service"
+version = "0.1.0"
+description = "Inventory service for devops-order-system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask",
+    "redis",
+    "pika",
+    "prometheus-client>=0.24.1",
+]
+
+[tool.uv]
+# This section can be extended for uv-specific settings if needed
