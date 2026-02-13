@@ -20,13 +20,6 @@ RUN uv pip install .
 # Copy app code
 COPY . .
 
-ENV DB_HOST=order-db
-ENV DB_NAME=orders
-ENV DB_USER=admin
-ENV DB_PASSWORD=password123
-ENV DB_PORT=5432
-ENV BROKER_HOST=rabbitmq
-ENV BROKER_PORT=5672
 
 EXPOSE 5000
 CMD ["python", "app.py"]

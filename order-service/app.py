@@ -22,12 +22,12 @@ def get_db_connection():
     db_url = os.environ.get("DB_URL")
     if db_url:
         return psycopg2.connect(db_url)
-    # fallback for local/dev
+    # fallback for local/dev, now requires env vars (no hardcoded defaults)
     return psycopg2.connect(
-        dbname=os.environ.get("DB_NAME", "orders"),
-        user=os.environ.get("DB_USER", "admin"),
-        password=os.environ.get("DB_PASSWORD", "password123"),
-        host=os.environ.get("DB_HOST", "order-db"),
+        dbname=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        host=os.environ["DB_HOST"],
         port=os.environ.get("DB_PORT", 5432)
     )
 
