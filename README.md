@@ -1,132 +1,114 @@
-
-# DevOps Order System
+# DevOps Order System — CI/CD Hands-on Exercise
 
 What this application does
-- Accepts HTTP order requests via a gateway and `order-service`.
-- `order-service` attempts to reserve stock for an order by calling `inventory-service`'s `/reserve` endpoint before inserting an order record into Postgres.
-- `inventory-service` provides an atomic reservation endpoint backed by Redis (Lua script) to prevent negative stock and race conditions.
-- On successful order creation, an event is published to RabbitMQ (used by consumers for downstream processing). Prometheus metrics are exposed by services for monitoring.
+- Accepts HTTP order requests through an NGINX gateway to `order-service`.
+- `order-service` attempts a stock reservation via `inventory-service`'s `/reserve` endpoint before inserting an order into Postgres.
+- `inventory-service` performs atomic reservations using Redis + a small Lua script to avoid negative stock.
+- Successful orders publish an `order_created` event to RabbitMQ; services expose Prometheus metrics.
 
-This project is a CI/CD hands-on exercise that uses a small application and workflow to teach continuous integration, testing, build, and image-publish flows.
+Motivation
+- This repository is a hands-on DevOps/CI-CD exercise. It is intended to teach and let you experiment with:
+  - Docker & Docker Compose for reproducible local stacks
+  - Unit and service tests with `pytest`
+  - Building CI pipelines (GitHub Actions) that run tests before build/publish
+  - Basic operational concerns: secrets handling, logs, metrics, and simple design tradeoffs
 
-## Project Structure
-
-- `order-service/`: Handles order processing ([Order Service README](order-service/README.md))
-- `inventory-service/`: Manages inventory ([Inventory Service README](inventory-service/README.md))
-- `gateway/`: NGINX gateway configuration
-- `monitoring/`: Prometheus monitoring setup
-- `docker-compose.yml`: Multi-service orchestration
-
-## Setup
-
-Each service uses [uv](https://github.com/astral-sh/uv) for dependency and environment management.
-
-### Per-Service Setup
-
-1. Navigate to the service directory:
-   - `cd order-service` or `cd inventory-service`
-2. Create a virtual environment:
-   - `uv venv`
-# DevOps CI/CD Hands-on Exercise — DevOps Order System
-
-Purpose
-- This repository is a hands‑on CI/CD exercise platform (not a microservices demo). It contains a small application and CI workflow designed to teach continuous integration, testing, build, and image-publish flows.
-
-What this exercise covers
-- Running unit tests with `pytest`.
-- Running service tests locally with `docker compose`.
-- Requiring tests to pass in CI before building/pushing images (`.github/workflows/ci-cd.yml`).
-- Securing secrets (local `.env`, GitHub Secrets for CI).
-- Observability basics: metrics, logs, and service checks.
-
-Repository layout (short)
-- `order-service/` — Flask-based order API + tests
-- `inventory-service/` — inventory logic + tests (atomic reserve Lua script)
+Repository layout
+- `order-service/` — Flask API to create orders, reserve inventory, persist to Postgres, and publish events
+- `inventory-service/` — Flask API to reserve stock and view inventory (Redis-backed)
+- `gateway/` — NGINX config (HTTP entry point for the demo)
+- `monitoring/` — Prometheus config
+- `docker-compose.yml` — local stack orchestration for hands-on testing
 - `.github/workflows/ci-cd.yml` — CI pipeline (tests → build → push)
-- `docker-compose.yml` — local stack for hands‑on testing
-- `.env` (local only) — runtime variables (DO NOT commit)
 
-Quickstart (local)
-1. Create a local `.env` (example values; do not commit):
-```dotenv
+Quickstart (minimal, reproducible)
+
+Prerequisites
+- Docker and Docker Compose (v2) installed and running.
+
+1) Create a local `.env` file in the project root (example — do NOT commit):
+
+```env
 POSTGRES_USER=admin
-POSTGRES_PASSWORD=change_me
+POSTGRES_PASSWORD=password123
 POSTGRES_DB=orders
+DB_URL=postgres://admin:password123@order-db:5432/orders
 BROKER_HOST=rabbitmq
 BROKER_PORT=5672
 REDIS_HOST=inventory-db
 DEFAULT_STOCK=100
 ```
 
-2. Start the stack:
-```powershell
+2) Start the stack (from the repository root):
+
+```bash
 docker compose up -d
 ```
 
-3. Run unit tests per-service:
-```powershell
-cd order-service; pytest -q
-cd ../inventory-service; pytest -q
+3) (Optional) Run the tests for each service locally:
+
+```bash
+cd order-service && pytest -q
+cd ../inventory-service && pytest -q
 ```
 
-4. Quick end‑to‑end check (create an order):
-```powershell
-Invoke-RestMethod -Uri http://localhost:8080/orders -Method Post `
-  -Body (@{item='widget'; quantity=1} | ConvertTo-Json) -ContentType 'application/json'
+4) Smoke test — create an order (curl example):
+
+```bash
+curl -sS -X POST http://localhost:8080/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"item":"widget","quantity":1}'
 ```
 
-5. Inspect runtime data:
-```powershell
-docker compose exec -e PGPASSWORD=%POSTGRES_PASSWORD% order-db \
-  psql -U %POSTGRES_USER% -d %POSTGRES_DB% -c "SELECT * FROM orders;"
+5) Inspect runtime state (examples):
 
+```bash
+# List running containers
+docker compose ps
+
+# Query Postgres orders table
+docker compose exec -e PGPASSWORD=$POSTGRES_PASSWORD order-db \
+  psql -U $POSTGRES_USER -d $POSTGRES_DB -c "SELECT * FROM orders;"
+
+# Read inventory from Redis
 docker compose exec inventory-db redis-cli GET widget
 ```
 
+Notes
+- If you change Postgres credentials or the `.env` defaults, recreate volumes to reinitialize the DB:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
 CI / GitHub Actions
-- Workflow: `.github/workflows/ci-cd.yml`.
-- Flow: push → run tests for each service → build & push images (requires registry secrets).
-- Set `DOCKER_HUB_USERNAME` and `DOCKER_HUB_ACCESS_TOKEN` in GitHub Secrets to enable image publish.
+- Workflow: `.github/workflows/ci-cd.yml` — runs tests for each service and, on success, builds and (optionally) pushes images.
+- To enable image publishing, configure GitHub Secrets: `DOCKER_HUB_USERNAME` and `DOCKER_HUB_ACCESS_TOKEN` (or other registry credentials).
 
-Notes & best practices
-- Never commit secrets. Use `.env` locally (gitignored) and GitHub Secrets for CI.
-- Redis is intentionally internal to the Compose network (no host `ports:` mapping) for secure defaults.
-- If you change Postgres credentials, recreate volumes: `docker compose down -v` then `docker compose up -d`.
-- Keep tests that need external services as integration tests; mock external dependencies when appropriate to keep CI fast.
+Design choices (summary)
+- Current stack choice: Redis + Lua for fast, atomic reservations; Postgres for long-term order storage; RabbitMQ for events.
+- Why Redis: provides low-latency atomic operations and is useful for demonstrating race-free reservations in a hands-on exercise.
+- Why Postgres: single source of truth for orders and relational queries.
+- Alternatives: implement reservations in Postgres using transactional row locking (`SELECT ... FOR UPDATE`) for stronger consistency at the cost of contention/latency.
+- Recommendation: keep the Redis-based reservation for the exercise (fast feedback), and document or add an optional Postgres transactional implementation for comparison.
 
-Next steps / exercise ideas
-- Add more unit tests and ensure CI fails when tests fail.
-- Harden CI: add caching, linters, and dependency pinning.
-- Add a deployment job (Kubernetes/ECS) to the workflow for full CI/CD.
+Service functional notes
+- `order-service`: validates input, calls `inventory-service` `/reserve`, inserts order on success, and publishes `order_created` to RabbitMQ.
+- `inventory-service`: `POST /reserve` performs atomic initialize-and-decrement with Lua; `GET /inventory/<item>` returns current stock.
 
-Support
-- Tail logs: `docker compose logs -f order-service inventory-service order-db rabbitmq`
-- Check running containers: `docker compose ps`
+Troubleshooting & support
+- Tail logs:
 
-This README is the canonical guide for this repository; per-service README files were removed to keep the exercise focused.
+```bash
+docker compose logs -f order-service inventory-service order-db rabbitmq
+```
 
-What this application does
-- Accepts HTTP order requests via a gateway and `order-service`.
-- `order-service` attempts to reserve stock for an order by calling `inventory-service`'s `/reserve` endpoint before inserting an order record into Postgres.
-- `inventory-service` provides an atomic reservation endpoint backed by Redis (Lua script) to prevent negative stock and race conditions.
-- On successful order creation, an event is published to RabbitMQ (used by consumers for downstream processing). Prometheus metrics are exposed by services for monitoring.
+- If tests fail in CI, check that the Actions workflow installs each service's dependencies and that required services are reachable during tests.
 
-Service details (functional)
-- `order-service`:
-  - Purpose: API for creating orders and persisting them to Postgres.
-  - Key actions: validate input, call inventory `/reserve`, insert into `orders` table on success, publish `order_created` event to RabbitMQ.
-  - Important envs: `DB_URL`/`POSTGRES_*`, `INVENTORY_URL`, `BROKER_HOST`/`BROKER_PORT`.
+Next steps / exercises
+- Add more unit tests and mark slow integration tests so CI runs fast.
+- Harden CI: add caching, linters, and pinned dependency versions.
+- Add a deployment job (Kubernetes, ECS, etc.) to complete the full CI→CD flow.
 
-- `inventory-service`:
-  - Purpose: manage stock and provide an atomic reservation API.
-  - Key actions: `POST /reserve` atomically initializes stock (if missing) and decrements using a Lua script; `GET /inventory/<item>` returns current stock.
-  - Important envs: `REDIS_HOST`/`DEFAULT_STOCK`, `BROKER_HOST`/`BROKER_PORT` (consumer uses RabbitMQ when running).
-
-- `gateway` (NGINX):
-  - Purpose: reverse-proxy and entry point for HTTP traffic to `order-service`.
-
-- `monitoring` (Prometheus/Grafana):
-  - Purpose: scrape service metrics and provide dashboards.
-
-Documentation note
-- Per-service README files were removed; this root README contains service-level functional descriptions. If you want service-level developer guidance (build, test, run examples per service), I can add short sections under each service name or recreate minimal `order-service/README.md` and `inventory-service/README.md` files.
+This README is the canonical guide for this repository and contains the service-level functional descriptions.
