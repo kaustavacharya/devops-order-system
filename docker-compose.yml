@@ -28,8 +28,7 @@ services:
   # Inventory database
   inventory-db:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # Keep Redis internal to the compose network (no host port published)
 
   # Event broker
   rabbitmq:
@@ -51,7 +50,7 @@ services:
       - rabbitmq
     # No ports exposed; NGINX gateway handles routing
     deploy:
-      replicas: 2
+      replicas: 1
 
 
   inventory-service:

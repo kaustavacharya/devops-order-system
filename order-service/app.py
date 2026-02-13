@@ -10,6 +10,8 @@ import psycopg2
 import pika
 import os
 import json
+import urllib.request
+import urllib.error
 
 app = Flask(__name__)
 order_counter = Counter('orders_created_total', 'Total number of orders created')
@@ -68,18 +70,44 @@ def get_rabbitmq_channel():
             time.sleep(wait)
     raise RuntimeError("[order-service] Could not connect to RabbitMQ after retries.")
 
-# Initialize connections
-conn = get_db_connection()
-ensure_orders_table(conn)
+
+conn = None
+if __name__ != "__main__":
+    # Only set up DB connection for production, not during import (e.g., for tests)
+    try:
+        conn = get_db_connection()
+        ensure_orders_table(conn)
+    except Exception:
+        pass
+
 
 
 @app.route("/orders", methods=["POST"])
 def create_order():
+    global conn
+    if conn is None:
+        conn = get_db_connection()
+        ensure_orders_table(conn)
     data = request.json
     cursor = conn.cursor()
     # Accept both 'item_id' and 'item' for compatibility
     item = data.get("item_id") or data.get("item")
     quantity = data["quantity"]
+
+    # Reserve stock via inventory service before creating order
+    inventory_url = os.environ.get("INVENTORY_URL", "http://inventory-service:5001")
+    reserve_payload = json.dumps({"item": item, "quantity": quantity}).encode()
+    req = urllib.request.Request(f"{inventory_url}/reserve", data=reserve_payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return jsonify({"error": "inventory service error", "detail": e.read().decode()}), 502
+    except Exception as e:
+        return jsonify({"error": "inventory service unreachable", "detail": str(e)}), 502
+
+    if not body.get("success"):
+        return jsonify({"error": "insufficient_stock", "remaining": body.get("remaining")}), 409
     cursor.execute(
         "INSERT INTO orders (item, quantity) VALUES (%s, %s) RETURNING id",
         (item, quantity)
